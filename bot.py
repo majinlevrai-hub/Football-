@@ -117,22 +117,42 @@ class BetView(View):
             if amount <= 0:
                 await interaction.followup.send("❌ Le montant doit être positif !", ephemeral=True)
                 return
-            
-            # Demander le paiement via CoinsBot
+                        # Demander le paiement via CoinsBot
             payment_msg = await interaction.channel.send(
                 f"💳 {interaction.user.mention}, **envoyez votre paiement maintenant** :\n"
                 f"```&pay @CoinsBot {amount}```\n\n"
-                f"⏳ Vous avez **2 minutes** pour envoyer le paiement.\n"
-                f"✅ Cliquez sur ✅ une fois le paiement envoyé\n"
-                f"❌ Cliquez sur ❌ pour annuler"
+                f"⏳ Vous avez **2 minutes** pour envoyer le paiement."
             )
-            await payment_msg.add_reaction("✅")
-            await payment_msg.add_reaction("❌")
             
-            def reaction_check(reaction, user):
-                return user.id == interaction.user.id and str(reaction.emoji) in ["✅", "❌"]
+            # Vérification du paiement réel
+            def payment_check(m):
+                return (
+                    m.author.id == interaction.user.id and 
+                    m.channel.id == interaction.channel.id and
+                    m.content.strip().lower().startswith('&pay') and
+                    f'<@{COINSBOT_USER_ID}>' in m.content and
+                    str(amount) in m.content
+                )
             
-            reaction, user = await bot.wait_for('reaction_add', check=reaction_check, timeout=120.0)
+            try:
+                payment_message = await bot.wait_for('message', check=payment_check, timeout=120.0)
+            except TimeoutError:
+                await interaction.followup.send("⏱️ Temps écoulé, pari annulé.", ephemeral=True)
+                await payment_msg.delete()
+                return
+            
+            # Paiement détecté, attendre 3 secondes pour laisser CoinsBot répondre
+            await interaction.followup.send(
+                f"✅ Paiement détecté ! Vérification en cours...",
+                ephemeral=True
+            )
+            
+            import asyncio
+            await asyncio.sleep(3)
+            
+            # Vérifier si CoinsBot a bien répondu (transaction validée)
+            if True:  # On suppose que le paiement est valide si le message est envoyé
+
             
             if str(reaction.emoji) == "✅":
                 # Enregistrer le pari

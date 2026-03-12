@@ -11,8 +11,8 @@ load_dotenv()
 
 TOKEN = os.getenv('DISCORD_TOKEN')
 FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY')
-COINSBOT_USER_ID = int(os.getenv('COINSBOT_USER_ID'))
-ADMIN_ROLE_ID = int(os.getenv('ADMIN_ROLE_ID'))
+COINSBOT_USER_ID = int(os.getenv('COINSBOT_USER_ID', 0))
+ADMIN_ROLE_ID = int(os.getenv('ADMIN_ROLE_ID', 0))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -24,12 +24,12 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 BETS_FILE = 'bets.json'
 MATCHES_FILE = 'matches.json'
 
-# Compétitions supportées
+# Compétitions Football-Data.org
 LEAGUES = {
-    'ligue1': {'id': 61, 'name': 'Ligue 1', 'emoji': '🇫🇷'},
-    'pl': {'id': 39, 'name': 'Premier League', 'emoji': '🏴󠁧󠁢󠁥󠁮󠁧󠁿'},
-    'ucl': {'id': 2, 'name': 'Champions League', 'emoji': '🏆'},
-    'europa': {'id': 3, 'name': 'Europa League', 'emoji': '🌍'}
+    'ligue1': {'id': 'FL1', 'name': 'Ligue 1', 'emoji': '🇫🇷'},
+    'pl': {'id': 'PL', 'name': 'Premier League', 'emoji': '🏴󠁧󠁢󠁥󠁮󠁧󠁿'},
+    'ucl': {'id': 'CL', 'name': 'Champions League', 'emoji': '🏆'},
+    'europa': {'id': 'EL', 'name': 'Europa League', 'emoji': '🌍'}
 }
 
 def load_data(filename):
@@ -43,28 +43,23 @@ def save_data(filename, data):
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-async def fetch_matches(league_id):
-    """Récupère les matchs à venir via l'API Football"""
-    url = "https://v3.football.api-sports.io/fixtures"
+async def fetch_matches(league_code):
+    """Récupère les matchs via Football-Data.org API"""
+    url = f"https://api.football-data.org/v4/competitions/{league_code}/fixtures"
     headers = {
-        'x-apisports-key': FOOTBALL_API_KEY
-    }
-    today = datetime.now().strftime('%Y-%m-%d')
-    next_week = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-    
-    params = {
-        'league': league_id,
-        'season': datetime.now().year,
-        'from': today,
-        'to': next_week,
-        'status': 'NS'  # Not Started
+        'X-Auth-Token': FOOTBALL_API_KEY
     }
     
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, params=params) as resp:
+        async with session.get(url, headers=headers) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                return data.get('response', [])
+                # Filtrer matchs à venir (SCHEDULED)
+                upcoming = [m for m in data.get('matches', []) 
+                           if m['status'] == 'SCHEDULED'][:5]
+                return upcoming
+            else:
+                print(f"Erreur API {league_code}: Status {resp.status}")
     return []
 
 class BetView(View):
@@ -88,22 +83,17 @@ class BetView(View):
     
     async def process_bet(self, interaction: discord.Interaction, bet_type):
         user_id = str(interaction.user.id)
-        
-        # Charger les paris existants
         bets = load_data(BETS_FILE)
         
-        # Vérifier si l'utilisateur a déjà parié sur ce match
-        if self.match_id in bets:
-            if user_id in bets[self.match_id]['bets']:
-                await interaction.response.send_message(
-                    "❌ Vous avez déjà parié sur ce match !",
-                    ephemeral=True
-                )
-                return
+        if self.match_id in bets and user_id in bets[self.match_id]['bets']:
+            await interaction.response.send_message(
+                "❌ Vous avez déjà parié sur ce match !",
+                ephemeral=True
+            )
+            return
         
-        # Demander le montant
         await interaction.response.send_message(
-            f"💰 Combien voulez-vous parier ? Répondez avec un montant (ex: 100)",
+            f"💰 Combien voulez-vous parier ? (ex: 100)",
             ephemeral=True
         )
         
@@ -118,11 +108,10 @@ class BetView(View):
                 await interaction.followup.send("❌ Le montant doit être positif !", ephemeral=True)
                 return
             
-            # Demander le paiement via CoinsBot
             payment_msg = await interaction.channel.send(
-                f"{interaction.user.mention}, envoyez {amount} coins à <@{COINSBOT_USER_ID}> avec la commande :\n"
+                f"{interaction.user.mention}, envoyez {amount} coins à <@{COINSBOT_USER_ID}> :\n"
                 f"```/pay @CoinsBot {amount}```\n"
-                f"Une fois fait, cliquez sur ✅"
+                f"Puis cliquez sur ✅"
             )
             await payment_msg.add_reaction("✅")
             await payment_msg.add_reaction("❌")
@@ -133,7 +122,6 @@ class BetView(View):
             reaction, user = await bot.wait_for('reaction_add', check=reaction_check, timeout=120.0)
             
             if str(reaction.emoji) == "✅":
-                # Enregistrer le pari
                 if self.match_id not in bets:
                     bets[self.match_id] = {
                         'home_team': self.home_team,
@@ -167,7 +155,7 @@ class BetView(View):
                 await interaction.followup.send("❌ Pari annulé.", ephemeral=True)
                 
         except TimeoutError:
-            await interaction.followup.send("⏱️ Temps écoulé, pari annulé.", ephemeral=True)
+            await interaction.followup.send("⏱️ Temps écoulé.", ephemeral=True)
         except ValueError:
             await interaction.followup.send("❌ Montant invalide !", ephemeral=True)
 
@@ -178,7 +166,7 @@ async def on_ready():
 
 @bot.command(name='matchs')
 async def show_matches(ctx, league: str = 'ligue1'):
-    """Affiche les matchs à venir pour une compétition"""
+    """Affiche les matchs à venir"""
     league = league.lower()
     
     if league not in LEAGUES:
@@ -189,7 +177,7 @@ async def show_matches(ctx, league: str = 'ligue1'):
     matches = await fetch_matches(league_info['id'])
     
     if not matches:
-        await ctx.send(f"Aucun match à venir pour {league_info['name']}")
+        await ctx.send(f"❌ Aucun match à venir pour {league_info['name']}")
         return
     
     embed = discord.Embed(
@@ -199,24 +187,22 @@ async def show_matches(ctx, league: str = 'ligue1'):
     
     matches_data = load_data(MATCHES_FILE)
     
-    for match in matches[:5]:  # Limiter à 5 matchs
-        fixture = match['fixture']
-        teams = match['teams']
+    for match in matches:
+        match_id = str(match['id'])
+        home = match['homeTeam']['name']
+        away = match['awayTeam']['name']
+        date_str = match['utcDate']
         
-        match_id = str(fixture['id'])
-        date = datetime.fromisoformat(fixture['date'].replace('Z', '+00:00'))
-        
-        # Sauvegarder le match
         matches_data[match_id] = {
             'league': league,
-            'home_team': teams['home']['name'],
-            'away_team': teams['away']['name'],
-            'date': fixture['date'],
-            'status': fixture['status']['short']
+            'home_team': home,
+            'away_team': away,
+            'date': date_str
         }
         
+        date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         embed.add_field(
-            name=f"{teams['home']['name']} vs {teams['away']['name']}",
+            name=f"{home} vs {away}",
             value=f"📅 {date.strftime('%d/%m/%Y %H:%M')}\n🆔 Match ID: {match_id}",
             inline=False
         )
@@ -226,19 +212,18 @@ async def show_matches(ctx, league: str = 'ligue1'):
 
 @bot.command(name='parier')
 async def place_bet(ctx, match_id: str):
-    """Placer un pari sur un match"""
+    """Placer un pari"""
     matches = load_data(MATCHES_FILE)
     
     if match_id not in matches:
-        await ctx.send("❌ Match introuvable. Utilisez `!matchs` pour voir les matchs disponibles.")
+        await ctx.send("❌ Match introuvable. Utilisez `!matchs` d'abord.")
         return
     
     match = matches[match_id]
-    
-    # Vérifier si le match n'a pas commencé
     match_date = datetime.fromisoformat(match['date'].replace('Z', '+00:00'))
+    
     if datetime.now(match_date.tzinfo) >= match_date:
-        await ctx.send("❌ Les paris sont fermés, le match a déjà commencé !")
+        await ctx.send("❌ Les paris sont fermés !")
         return
     
     embed = discord.Embed(
@@ -247,8 +232,6 @@ async def place_bet(ctx, match_id: str):
                     f"📅 {match_date.strftime('%d/%m/%Y %H:%M')}",
         color=discord.Color.green()
     )
-    
-    embed.add_field(name="Comment parier ?", value="Cliquez sur un bouton ci-dessous :", inline=False)
     
     view = BetView(match_id, match['home_team'], match['away_team'])
     await ctx.send(embed=embed, view=view)
@@ -290,9 +273,13 @@ async def my_bets(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name='resultats')
-@commands.has_role(ADMIN_ROLE_ID)
 async def set_results(ctx, match_id: str, result: str):
-    """[ADMIN] Définir le résultat d'un match (home/draw/away)"""
+    """[ADMIN] Définir le résultat (home/draw/away)"""
+    # Vérifier si l'utilisateur a le rôle admin
+    if not any(role.id == ADMIN_ROLE_ID for role in ctx.author.roles):
+        await ctx.send("❌ Vous n'avez pas la permission.")
+        return
+    
     if result not in ['home', 'draw', 'away']:
         await ctx.send("❌ Résultat invalide. Utilisez : home, draw ou away")
         return
@@ -312,9 +299,6 @@ async def set_results(ctx, match_id: str, result: str):
             winners.append((user_id, bet))
         else:
             losers.append((user_id, bet))
-    
-    # Calculer les gains (cote simple 2.0 pour l'exemple)
-    total_pool = sum(bet['amount'] for _, bet in match_data['bets'].values())
     
     embed = discord.Embed(
         title=f"📊 Résultats : {match_data['home_team']} vs {match_data['away_team']}",
@@ -345,36 +329,20 @@ async def set_results(ctx, match_id: str, result: str):
     
     await ctx.send(embed=embed)
     
-    # Supprimer le match des paris actifs
     del bets[match_id]
     save_data(BETS_FILE, bets)
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=30)
 async def check_matches():
     """Vérifier les matchs qui commencent bientôt"""
-    matches = load_data(MATCHES_FILE)
-    bets = load_data(BETS_FILE)
-    
-    now = datetime.now()
-    
-    for match_id, match in list(matches.items()):
-        match_date = datetime.fromisoformat(match['date'].replace('Z', '+00:00'))
-        
-        # Fermer les paris 5 minutes avant le début
-        if now >= match_date - timedelta(minutes=5) and match_id in bets:
-            print(f"🔒 Paris fermés pour : {match['home_team']} vs {match['away_team']}")
-
-@bot.command(name='classement')
-async def leaderboard(ctx):
-    """Afficher le classement des meilleurs parieurs"""
-    await ctx.send("🏆 Fonctionnalité à venir : Classement des meilleurs parieurs")
+    pass
 
 @bot.command(name='aide')
 async def help_command(ctx):
     """Afficher l'aide"""
     embed = discord.Embed(
         title="📖 Guide des commandes",
-        description="Bot de paris sportifs sur le football",
+        description="Bot de paris sportifs Football-Data.org",
         color=discord.Color.purple()
     )
     
@@ -394,8 +362,8 @@ async def help_command(ctx):
         inline=False
     )
     embed.add_field(
-        name="!classement",
-        value="Voir le classement",
+        name="!resultats <match_id> <home/draw/away>",
+        value="[ADMIN] Définir le résultat",
         inline=False
     )
     

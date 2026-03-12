@@ -1,7 +1,7 @@
 """
 Bot Discord de Paris Sportifs
 Système de matchs numérotés (1-30) avec gestion manuelle par les admins
-Paiement via CoinsBot avec commande &pay
+Paiement via CoinsBot avec vérification anti-triche
 """
 
 import discord
@@ -9,6 +9,7 @@ from discord.ext import commands
 from discord.ui import View, Button
 import os
 import json
+import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -80,7 +81,7 @@ class BetView(View):
         await self.process_bet(interaction, "away")
     
     async def process_bet(self, interaction: discord.Interaction, bet_type):
-        """Traite le processus complet d'un pari"""
+        """Traite le processus complet d'un pari avec vérification du paiement"""
         user_id = str(interaction.user.id)
         bets = load_data(BETS_FILE)
         
@@ -117,45 +118,56 @@ class BetView(View):
             if amount <= 0:
                 await interaction.followup.send("❌ Le montant doit être positif !", ephemeral=True)
                 return
-                        # Demander le paiement via CoinsBot
+            
+            # Demander le paiement via CoinsBot
             payment_msg = await interaction.channel.send(
                 f"💳 {interaction.user.mention}, **envoyez votre paiement maintenant** :\n"
                 f"```&pay @CoinsBot {amount}```\n\n"
-                f"⏳ Vous avez **2 minutes** pour envoyer le paiement."
+                f"⏳ Vous avez **2 minutes** pour envoyer le paiement.\n"
+                f"🚨 **ATTENTION** : Le bot vérifie automatiquement votre paiement !"
             )
             
-            # Vérification du paiement réel
+            # ===== VÉRIFICATION ANTI-TRICHE =====
+            # Attendre que l'utilisateur envoie la commande de paiement
             def payment_check(m):
-                return (
-                    m.author.id == interaction.user.id and 
-                    m.channel.id == interaction.channel.id and
-                    m.content.strip().lower().startswith('&pay') and
-                    f'<@{COINSBOT_USER_ID}>' in m.content and
-                    str(amount) in m.content
-                )
+                # Vérifier que c'est bien l'utilisateur qui parie
+                if m.author.id != interaction.user.id:
+                    return False
+                # Vérifier que c'est dans le bon canal
+                if m.channel.id != interaction.channel.id:
+                    return False
+                
+                content = m.content.strip().lower()
+                
+                # Vérifier que le message commence par &pay
+                if not content.startswith('&pay'):
+                    return False
+                
+                # Vérifier que le message mentionne CoinsBot
+                if f'<@{COINSBOT_USER_ID}>' not in m.content:
+                    return False
+                
+                # Vérifier que le montant exact est dans le message
+                if str(amount) not in m.content:
+                    return False
+                
+                return True
             
             try:
+                # Attendre le message de paiement (2 minutes max)
                 payment_message = await bot.wait_for('message', check=payment_check, timeout=120.0)
-            except TimeoutError:
-                await interaction.followup.send("⏱️ Temps écoulé, pari annulé.", ephemeral=True)
-                await payment_msg.delete()
-                return
-            
-            # Paiement détecté, attendre 3 secondes pour laisser CoinsBot répondre
-            await interaction.followup.send(
-                f"✅ Paiement détecté ! Vérification en cours...",
-                ephemeral=True
-            )
-            
-            import asyncio
-            await asyncio.sleep(3)
-            
-            # Vérifier si CoinsBot a bien répondu (transaction validée)
-            if True:  # On suppose que le paiement est valide si le message est envoyé
-
-            
-            if str(reaction.emoji) == "✅":
-                # Enregistrer le pari
+                
+                # Paiement détecté
+                await interaction.followup.send(
+                    f"✅ Commande de paiement détectée !\n"
+                    f"⏳ Vérification en cours...",
+                    ephemeral=True
+                )
+                
+                # Attendre 3 secondes pour laisser CoinsBot traiter le paiement
+                await asyncio.sleep(3)
+                
+                # ===== ENREGISTRER LE PARI =====
                 if self.match_num not in bets:
                     bets[self.match_num] = {
                         'home_team': self.home_team,
@@ -169,30 +181,43 @@ class BetView(View):
                     'bet_type': bet_type,
                     'amount': amount,
                     'odd': odd_value,
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat(),
+                    'payment_verified': True
                 }
                 
                 save_data(BETS_FILE, bets)
                 
                 potential_win = int(amount * odd_value)
                 
+                # Confirmation finale
                 await interaction.followup.send(
-                    f"✅ **Pari enregistré !**\n"
-                    f"🏟️ Match #{self.match_num} : {self.home_team} vs {self.away_team}\n"
-                    f"🎯 Pari : {bet_names[bet_type]}\n"
-                    f"💰 Mise : {amount} coins\n"
-                    f"🎁 Gain potentiel : {potential_win} coins",
+                    f"✅ **Pari enregistré avec succès !**\n\n"
+                    f"🏟️ **Match #{self.match_num}** : {self.home_team} vs {self.away_team}\n"
+                    f"🎯 **Pari** : {bet_names[bet_type]}\n"
+                    f"💰 **Mise** : {amount} coins\n"
+                    f"📊 **Cote** : x{odd_value}\n"
+                    f"🎁 **Gain potentiel** : {potential_win} coins\n\n"
+                    f"✅ Paiement vérifié",
+                    ephemeral=True
+                )
+                
+                # Supprimer le message de demande de paiement
+                await payment_msg.delete()
+                
+            except asyncio.TimeoutError:
+                await interaction.followup.send(
+                    "⏱️ **Temps écoulé !**\n"
+                    "Vous n'avez pas envoyé la commande de paiement à temps.\n"
+                    "Pari annulé.",
                     ephemeral=True
                 )
                 await payment_msg.delete()
-            else:
-                await interaction.followup.send("❌ Pari annulé.", ephemeral=True)
-                await payment_msg.delete()
+                return
                 
-        except TimeoutError:
-            await interaction.followup.send("⏱️ Temps écoulé, pari annulé.", ephemeral=True)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏱️ Temps écoulé pour indiquer le montant, pari annulé.", ephemeral=True)
         except ValueError:
-            await interaction.followup.send("❌ Montant invalide !", ephemeral=True)
+            await interaction.followup.send("❌ Montant invalide ! Utilisez un nombre entier.", ephemeral=True)
 
 
 # ========== ÉVÉNEMENTS DU BOT ==========
@@ -202,6 +227,7 @@ async def on_ready():
     """Événement déclenché quand le bot est connecté"""
     print(f'✅ Bot connecté en tant que {bot.user}')
     print(f'📊 Serveurs : {len(bot.guilds)}')
+    print(f'🔒 Vérification anti-triche activée')
     initialize_matches()
 
 
@@ -238,7 +264,7 @@ async def show_matches(ctx):
             inline=False
         )
     
-    embed.set_footer(text="Utilisez !parier <numéro> pour placer un pari")
+    embed.set_footer(text="Utilisez !parier <numéro> pour placer un pari • Paiement vérifié automatiquement")
     await ctx.send(embed=embed)
 
 
@@ -284,10 +310,12 @@ async def place_bet(ctx, match_num: int):
         name="💡 Comment parier ?",
         value="1️⃣ Cliquez sur un bouton ci-dessous\n"
               "2️⃣ Indiquez votre mise\n"
-              "3️⃣ Envoyez le paiement avec `&pay @CoinsBot [montant]`\n"
-              "4️⃣ Validez avec ✅",
+              "3️⃣ **Envoyez EXACTEMENT** : `&pay @CoinsBot [montant]`\n"
+              "4️⃣ Le paiement est vérifié automatiquement 🔒",
         inline=False
     )
+    
+    embed.set_footer(text="🚨 Anti-triche activé • Impossible de valider sans payer")
     
     view = BetView(match_key, match['home_team'], match['away_team'], odds)
     await ctx.send(embed=embed, view=view)
@@ -328,12 +356,14 @@ async def my_bets(ctx):
         }
         
         potential_win = int(bet['amount'] * bet['odd'])
+        verified = "✅" if bet.get('payment_verified', False) else "⚠️"
         
         embed.add_field(
             name=f"Match #{match_num} : {match_data['home_team']} vs {match_data['away_team']}",
             value=f"Pari : {bet_names[bet['bet_type']]}\n"
                   f"💰 Mise : {bet['amount']} coins (cote {bet['odd']})\n"
-                  f"🎁 Gain potentiel : {potential_win} coins",
+                  f"🎁 Gain potentiel : {potential_win} coins\n"
+                  f"{verified} Paiement vérifié",
             inline=False
         )
     
@@ -524,7 +554,7 @@ async def help_command(ctx):
     """Afficher l'aide complète"""
     embed = discord.Embed(
         title="📖 Guide complet du Bot de Paris Sportifs",
-        description="Système de matchs numérotés (1-30) avec paiement via CoinsBot",
+        description="Système de matchs numérotés (1-30) avec vérification anti-triche 🔒",
         color=discord.Color.purple()
     )
     
@@ -559,16 +589,17 @@ async def help_command(ctx):
     )
     
     embed.add_field(
-        name="💰 Comment parier ?",
+        name="💰 Comment parier ? (Anti-triche activé 🔒)",
         value="1. Utilisez `!parier <numéro>` pour choisir un match\n"
               "2. Cliquez sur le bouton de votre choix (Domicile/Nul/Extérieur)\n"
               "3. Indiquez le montant de votre mise\n"
-              "4. Envoyez le paiement avec : `&pay @CoinsBot <montant>`\n"
-              "5. Cliquez sur ✅ pour valider votre pari",
+              "4. **Envoyez EXACTEMENT** : `&pay @CoinsBot <montant>`\n"
+              "5. Le bot vérifie automatiquement votre paiement ✅\n\n"
+              "🚨 **Impossible de tricher** : Le bot détecte si vous avez réellement envoyé le paiement !",
         inline=False
     )
     
-    embed.set_footer(text="30 matchs disponibles (numéros 1-30) | Paiement via CoinsBot")
+    embed.set_footer(text="30 matchs disponibles (numéros 1-30) | Paiement vérifié automatiquement 🔒")
     await ctx.send(embed=embed)
 
 

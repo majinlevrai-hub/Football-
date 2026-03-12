@@ -122,7 +122,7 @@ class BetView(View):
             # Demander le paiement via CoinsBot
             payment_msg = await interaction.channel.send(
                 f"💳 {interaction.user.mention}, **envoyez votre paiement maintenant** :\n"
-                f"```&pay @CoinsBot {amount}```\n\n"
+                f"```&pay @Majinlefaux {amount}```\n\n"
                 f"⏳ Vous avez **2 minutes** pour envoyer le paiement.\n"
                 f"🚨 **ATTENTION** : Le bot vérifie automatiquement votre paiement !"
             )
@@ -144,7 +144,7 @@ class BetView(View):
                     return False
                 
                 # Vérifier que le message mentionne CoinsBot
-                if f'<@{COINSBOT_USER_ID}>' not in m.content:
+                if f'<@{784531689837559828}>' not in m.content:
                     return False
                 
                 # Vérifier que le montant exact est dans le message

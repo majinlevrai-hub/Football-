@@ -44,25 +44,21 @@ def save_data(filename, data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 async def fetch_matches(league_id):
-    """Données de test - matchs fictifs"""
-    return [
-        {
-            "fixture": {"id": 123456},
-            "teams": {
-                "home": {"name": "PSG"},
-                "away": {"name": "OM"}
-            }
-        },
-        {
-            "fixture": {"id": 123457, "date": "2026-03-15T20:45:00Z"},
-            "teams": {
-                "home": {"name": "Lyon"},
-                "away": {"name": "Monaco"}
-            }
-        }
-    ]
-
+    """Récupère les matchs à venir via l'API Football"""
+    url = "https://v3.football.api-sports.io/fixtures"
+    headers = {
+        'x-apisports-key': FOOTBALL_API_KEY
+    }
+    today = datetime.now().strftime('%Y-%m-%d')
+    next_week = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
     
+    params = {
+        'league': league_id,
+        'season': datetime.now().year,
+        'from': today,
+        'to': next_week,
+        'status': 'NS'  # Not Started
+    }
     
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers, params=params) as resp:

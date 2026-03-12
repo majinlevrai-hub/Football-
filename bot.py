@@ -129,40 +129,49 @@ class BetView(View):
             
             # ===== VÉRIFICATION ANTI-TRICHE =====
             # Attendre que l'utilisateur envoie la commande de paiement
-            def payment_check(m):
-                # Vérifier que c'est bien l'utilisateur qui parie
-                if m.author.id != interaction.user.id:
+                        # Demander le paiement via CoinsBot
+            payment_msg = await interaction.channel.send(
+                f"💳 {interaction.user.mention}, **envoyez votre paiement maintenant** :\n"
+                f"```&pay @CoinsBot {amount}```\n\n"
+                f"⏳ Vous avez **2 minutes** pour effectuer le paiement.\n"
+                f"🔍 Le bot attend la confirmation automatique de CoinsBot..."
+            )
+            
+            # Vérification automatique du message de confirmation de CoinsBot
+            def payment_confirmation_check(m):
+                # Le message doit venir de CoinsBot
+                if m.author.id != COINSBOT_USER_ID:
                     return False
-                # Vérifier que c'est dans le bon canal
+                
+                # Le message doit être dans le même canal
                 if m.channel.id != interaction.channel.id:
                     return False
                 
-                content = m.content.strip().lower()
+                content = m.content.lower()
                 
-                # Vérifier que le message commence par &pay
-                if not content.startswith('&pay'):
+                # Vérifier que c'est bien un message de paiement
+                if ':coin:' not in content and 'vous venez de payer' not in content:
                     return False
                 
-                # Vérifier que le message mentionne CoinsBot
-                if f'<@{784531689837559828}>' not in m.content:
-                    return False
-                
-                # Vérifier que le montant exact est dans le message
-                if str(amount) not in m.content:
+                # Vérifier que le montant correspond
+                if f'`{amount} coins`' not in m.content and f'``{amount} coins``' not in m.content:
                     return False
                 
                 return True
             
             try:
-                # Attendre le message de paiement (2 minutes max)
-                payment_message = await bot.wait_for('message', check=payment_check, timeout=120.0)
+                # Attendre le message de confirmation de CoinsBot (2 minutes max)
+                confirmation_msg = await bot.wait_for('message', check=payment_confirmation_check, timeout=120.0)
                 
-                # Paiement détecté
+                # Paiement confirmé par CoinsBot
                 await interaction.followup.send(
-                    f"✅ Commande de paiement détectée !\n"
-                    f"⏳ Vérification en cours...",
+                    f"✅ **Paiement confirmé par CoinsBot !**\n"
+                    f"💰 {amount} coins reçus",
                     ephemeral=True
                 )
+                
+                # Enregistrer le pari
+
                 
                 # Attendre 3 secondes pour laisser CoinsBot traiter le paiement
                 await asyncio.sleep(3)
